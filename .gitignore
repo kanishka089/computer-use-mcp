@@ -1,0 +1,19 @@
+# Virtualenv
+.venv/
+
+# Python build/runtime artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Local configuration / secrets
+.env
+
+# Screenshot / self-test artifacts
+test_capture.png
+test_capture.jpg
+all_screens.png
+*.png
+*.jpg
