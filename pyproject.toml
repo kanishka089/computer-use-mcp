@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "computer-use-mcp"
+version = "0.1.0"
+description = "MCP server that lets Claude operate the REAL desktop (mouse, keyboard, screen) like a human — works in your own logged-in Chrome and any app"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "kanishka089" }]
+keywords = ["mcp", "claude", "computer-use", "automation", "desktop", "rpa"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "mcp>=1.2",
+    "pyautogui>=0.9.54",
+    "mss>=9.0",
+    "pillow>=10.0",
+    "pynput>=1.7",
+    "keyboard>=0.13.5",
+    "pyperclip>=1.8",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+computer-use-mcp = "server:main"
+
+[project.urls]
+Homepage = "https://github.com/kanishka089/computer-use-mcp"
+Issues = "https://github.com/kanishka089/computer-use-mcp/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["server", "config", "screen", "input", "safety"]
