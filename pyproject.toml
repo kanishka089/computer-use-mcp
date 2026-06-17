@@ -30,6 +30,8 @@ dependencies = [
     "keyboard>=0.13.5",
     "pyperclip>=1.8",
     "python-dotenv>=1.0",
+    "pygetwindow>=0.0.9",
+    "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.scripts]

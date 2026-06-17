@@ -60,7 +60,7 @@ install.py    one-shot installer: venv, deps, .env, Claude Desktop registration
 
 Stack: Python 3.10/3.11 · `mcp` (FastMCP, stdio) · `pyautogui` · `mss` · `pillow` ·
 `pynput` · `keyboard` · `pyperclip` · `python-dotenv` — plus `pygetwindow` and `pywin32`
-for `activate_window` (installed in the venv; not yet listed in `pyproject.toml`).
+for `activate_window`.
 
 ## The `computer` tool
 
@@ -175,9 +175,6 @@ signed-in Chrome session.
   unreliable (the icon just flashes). `activate_window` uses `AttachThreadInput` +
   z-order toggling + a minimize/restore fallback, so prefer it for app switching.
 - **Don't run with Python 3.13/3.14.** Tested on 3.10/3.11 only; the installer warns.
-- **`pygetwindow` / `pywin32` are venv-only.** They're required by `activate_window` but
-  not yet declared in `pyproject.toml` — a fresh `pip install -e .` elsewhere would need
-  them added manually.
 - **Typing long/Unicode text uses the clipboard.** Your clipboard is saved and restored,
   but anything watching the clipboard will see the pasted text momentarily.
 
