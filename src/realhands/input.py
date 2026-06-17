@@ -13,7 +13,7 @@ import time
 import pyautogui
 import pyperclip
 
-import config
+from . import config
 
 # xdotool / X11 keysym  ->  pyautogui key name
 _KEY_MAP = {

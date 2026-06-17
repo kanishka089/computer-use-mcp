@@ -15,10 +15,10 @@ import time
 
 from mcp.server.fastmcp import FastMCP, Image
 
-import config
-import screen
-import safety
-import input as actions  # mouse/keyboard execution (real pixels)
+from . import config
+from . import screen
+from . import safety
+from . import input as actions  # mouse/keyboard execution (real pixels)
 
 
 mcp = FastMCP("computer-use")

@@ -17,7 +17,7 @@ from __future__ import annotations
 import io
 import sys
 
-import config
+from . import config
 
 
 def set_dpi_awareness() -> None:

@@ -18,7 +18,7 @@ import time
 
 import pyautogui
 
-import config
+from . import config
 
 _status = "idle"
 _started = False

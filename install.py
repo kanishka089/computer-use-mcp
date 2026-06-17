@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
 VENV_DIR = ROOT / ".venv"
-SERVER = ROOT / "src" / "server.py"
+SERVER_MODULE = "realhands.server"
 SERVER_NAME = "computer-use"
 
 
@@ -44,7 +44,7 @@ def step(msg: str) -> None:
 
 def _register_claude_desktop(py: Path) -> None:
     cfg_path = _claude_desktop_config()
-    entry = {"command": py.as_posix(), "args": [SERVER.as_posix()]}
+    entry = {"command": py.as_posix(), "args": ["-m", SERVER_MODULE]}
 
     if cfg_path.exists():
         try:
@@ -105,7 +105,7 @@ def main() -> int:
 
     step("Claude Code (optional)")
     print("    To also use it from Claude Code, run:")
-    print(f'      claude mcp add {SERVER_NAME} -- "{py.as_posix()}" "{SERVER.as_posix()}"')
+    print(f'      claude mcp add {SERVER_NAME} -- "{py.as_posix()}" -m {SERVER_MODULE}')
 
     print("\nDone. Panic hotkey = ctrl+alt+q. Mouse to top-left corner also aborts.\n")
     return 0

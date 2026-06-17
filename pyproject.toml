@@ -3,14 +3,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "computer-use-mcp"
+name = "realhands"
 version = "0.1.0"
 description = "MCP server that lets Claude operate the REAL desktop (mouse, keyboard, screen) like a human — works in your own logged-in Chrome and any app"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "kanishka089" }]
-keywords = ["mcp", "claude", "computer-use", "automation", "desktop", "rpa"]
+keywords = ["mcp", "claude", "computer-use", "automation", "desktop", "rpa", "realhands"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -35,12 +35,11 @@ dependencies = [
 ]
 
 [project.scripts]
-computer-use-mcp = "server:main"
+realhands = "realhands.server:main"
 
 [project.urls]
 Homepage = "https://github.com/kanishka089/computer-use-mcp"
 Issues = "https://github.com/kanishka089/computer-use-mcp/issues"
 
-[tool.setuptools]
-package-dir = { "" = "src" }
-py-modules = ["server", "config", "screen", "input", "safety"]
+[tool.setuptools.packages.find]
+where = ["src"]

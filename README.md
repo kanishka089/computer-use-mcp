@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.kanishka089/realhands -->
+
 # computer-use-mcp ("realhands")
 
 An MCP server that lets **Claude operate your real computer** the way a human does —
@@ -44,7 +46,7 @@ offset. Use the **same** monitor for a click as for the screenshot you're clicki
 ## Architecture
 
 ```
-src/
+src/realhands/
   server.py   FastMCP server "computer-use"; the single `computer` tool (action enum
               modeled on Anthropic's reference computer_20250124 tool); returns
               status text + a fresh screenshot after every action
@@ -117,8 +119,20 @@ delete data.**
 
 Requires **Python 3.10 or 3.11** (3.13+ untested; avoid the 3.14 beta).
 
+### From PyPI
+
 ```powershell
-cd d:\Company\AIOBDCODE\computer-use-mcp
+pip install realhands
+```
+
+This installs the `realhands` console script and the importable `realhands`
+package. Run the server with either `realhands` or `python -m realhands.server`.
+
+### From source (with Claude Desktop registration)
+
+```powershell
+git clone https://github.com/kanishka089/computer-use-mcp
+cd computer-use-mcp
 py -3.10 install.py
 ```
 
@@ -126,14 +140,13 @@ This creates `.venv/`, installs the package + deps (editable), copies `.env.exam
 `.env` if missing, and registers the server in Claude Desktop's config (backing up any
 existing config). **Restart Claude Desktop**, then look for the `computer-use` tool.
 
-### Claude Code (how this machine runs it)
+### Claude Code
 
-Registered as a **user-scope** stdio server named `realhands`:
+Register it as a **user-scope** stdio server named `realhands` (pointing at the Python
+that has the package installed):
 
 ```powershell
-claude mcp add realhands --scope user -- `
-  "d:/Company/AIOBDCODE/computer-use-mcp/.venv/Scripts/python.exe" `
-  "d:/Company/AIOBDCODE/computer-use-mcp/src/server.py"
+claude mcp add realhands --scope user -- python -m realhands.server
 ```
 
 The tool then appears as `mcp__realhands__computer` in every project.
@@ -181,7 +194,7 @@ signed-in Chrome session.
 ## Self-test
 
 ```powershell
-.\.venv\Scripts\python src\screen.py
+python -m realhands.screen
 ```
 
 Captures the screen, prints real vs. sent dimensions and the scale factor, writes
