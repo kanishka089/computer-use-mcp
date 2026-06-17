@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.kanishka089/realhands",
-  "title": "realhands — Real Desktop Computer Use",
-  "description": "Lets Claude drive your REAL mouse, keyboard & screen — works in your own logged-in apps.",
+  "title": "realhands - Real Desktop Computer Use",
+  "description": "Lets Claude drive your REAL mouse, keyboard and screen - works in your own logged-in apps.",
   "repository": {
     "url": "https://github.com/kanishka089/computer-use-mcp",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "pypi",
       "identifier": "realhands",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "transport": {
         "type": "stdio"
       }
