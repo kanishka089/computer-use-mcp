@@ -103,10 +103,13 @@ kill switches (`src/safety.py`):
 
 **Lazy arm / stand-down:** the overlay and the global panic hotkey are armed lazily on
 the **first action** of a task, not at server startup — idle sessions show nothing and
-grab no hotkeys. They stand down again when the agent calls `action="stop"`, or
-automatically after `COMPUTER_USE_IDLE_STOP` seconds (default 30) of inactivity. The
-lightweight stdio process stays connected so the next task is instant. Everything
-re-arms automatically on the next action.
+grab no hotkeys. They stand down when the agent calls `action="stop"` at the end of a
+task, and re-arm automatically on the next action. (The STOP overlay is a single
+persistent window that is *hidden* when dormant, never destroyed — recreating it was a
+crash hazard.) An optional idle auto-stand-down is available via
+`COMPUTER_USE_IDLE_STOP` but is **disabled by default**: an agent's thinking time
+between tool calls easily exceeds any short idle window, so a non-zero value would stand
+the agent down mid-task.
 
 Pacing also helps you stay in control: every action is followed by a configurable pause
 (`COMPUTER_USE_PAUSE`) and the cursor glides rather than teleports
@@ -172,7 +175,7 @@ signed-in Chrome session.
 | `COMPUTER_USE_PANIC_HOTKEY` | `ctrl+alt+q` | Global hard-stop hotkey |
 | `COMPUTER_USE_OVERLAY` | `1` | Show the STOP overlay window |
 | `COMPUTER_USE_MOVE_DURATION` | `0.4` | Cursor glide time (human-like movement) |
-| `COMPUTER_USE_IDLE_STOP` | `30` | Auto stand-down after this many idle seconds (0 = never) |
+| `COMPUTER_USE_IDLE_STOP` | `0` | Auto stand-down after this many idle seconds (`0` = never; stand down only on `action="stop"`) |
 
 ## Known gotchas
 

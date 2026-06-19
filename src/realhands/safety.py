@@ -24,8 +24,15 @@ _status = "idle"
 _started = False
 _last_activity = 0.0
 _hotkey_handle = None
-_overlay_close: threading.Event | None = None
 _watchdog_started = False
+
+# The STOP overlay is a SINGLE persistent Tk window, created once and shown/hidden
+# via these events — never destroyed and recreated. Creating a second tk.Tk() in a
+# fresh thread can hard-crash the process on Windows, which previously killed the
+# stdio connection every time the agent re-armed after an idle stand-down.
+_overlay_thread: threading.Thread | None = None
+_overlay_visible = threading.Event()
+_overlay_quit = threading.Event()
 
 
 def configure() -> None:
@@ -78,20 +85,23 @@ def _stop_hotkey() -> None:
     _hotkey_handle = None
 
 
-# --- STOP overlay ---
+# --- STOP overlay (single persistent window; shown/hidden, never recreated) ---
 
-def _start_overlay() -> None:
-    global _overlay_close
+def _ensure_overlay_thread() -> None:
+    """Spin up the one-and-only Tk overlay thread (lazily, once per process)."""
+    global _overlay_thread
+    if _overlay_thread is not None:
+        return
     try:
         import tkinter as tk
     except Exception:
         return
 
-    _overlay_close = threading.Event()
-    close_evt = _overlay_close
-
     def run() -> None:
-        root = tk.Tk()
+        try:
+            root = tk.Tk()
+        except Exception:
+            return
         root.title("computer-use")
         root.attributes("-topmost", True)
         root.resizable(False, False)
@@ -100,6 +110,7 @@ def _start_overlay() -> None:
             root.attributes("-alpha", 0.92)
         except Exception:
             pass
+        root.protocol("WM_DELETE_WINDOW", lambda: None)  # closing the X must not kill us
 
         status_var = tk.StringVar(value=_status)
         tk.Label(root, textvariable=status_var, font=("Segoe UI", 9),
@@ -109,25 +120,47 @@ def _start_overlay() -> None:
                   font=("Segoe UI", 11, "bold"), relief="flat",
                   command=_panic).pack(fill="x", padx=8, pady=(0, 8))
 
+        root.withdraw()  # start hidden; shown on demand
+        shown = {"v": False}
+
         def tick() -> None:
-            if close_evt.is_set():
+            if _overlay_quit.is_set():
                 try:
                     root.destroy()
                 except Exception:
                     pass
                 return
-            status_var.set(_status)
-            root.after(200, tick)
+            try:
+                if _overlay_visible.is_set():
+                    if not shown["v"]:
+                        root.deiconify()
+                        root.attributes("-topmost", True)
+                        shown["v"] = True
+                    status_var.set(_status)
+                elif shown["v"]:
+                    root.withdraw()
+                    shown["v"] = False
+            except Exception:
+                pass
+            root.after(150, tick)
 
         tick()
-        root.mainloop()
+        try:
+            root.mainloop()
+        except Exception:
+            pass
 
-    threading.Thread(target=run, daemon=True).start()
+    _overlay_thread = threading.Thread(target=run, daemon=True)
+    _overlay_thread.start()
 
 
-def _stop_overlay() -> None:
-    if _overlay_close is not None:
-        _overlay_close.set()
+def _show_overlay() -> None:
+    _ensure_overlay_thread()
+    _overlay_visible.set()
+
+
+def _hide_overlay() -> None:
+    _overlay_visible.clear()
 
 
 # --- arm / stand down ---
@@ -141,13 +174,15 @@ def start() -> None:
     _started = True
     _start_hotkey()
     if config.OVERLAY:
-        _start_overlay()
+        _show_overlay()
 
 
 def stop() -> None:
-    """Stand down: close the STOP overlay and release the panic hotkey, go dormant.
+    """Stand down: hide the STOP overlay and release the panic hotkey, go dormant.
 
     Re-arms automatically on the next action. Safe to call when already dormant.
+    The overlay window is only HIDDEN (not destroyed), so re-arming never has to
+    recreate Tk — which is what used to crash the process between actions.
     """
     global _started, _status
     if not _started:
@@ -155,7 +190,7 @@ def stop() -> None:
     _started = False
     _status = "idle"
     _stop_hotkey()
-    _stop_overlay()
+    _hide_overlay()
 
 
 def _start_watchdog() -> None:

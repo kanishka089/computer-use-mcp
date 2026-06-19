@@ -61,8 +61,8 @@ def computer(
     in the pixel space of the most recent screenshot (its size is reported each time);
     the server scales them to the real display automatically. After every non-screenshot
     action a fresh screenshot is returned so you can see the result before the next step.
-    When the task is COMPLETE, call action="stop" to stand down (it auto-stands-down
-    after a short idle period regardless).
+    When the task is COMPLETE, call action="stop" to stand down (close the STOP
+    overlay and release the panic hotkey). By default it stays armed until you do.
 
     Args:
         action: One of —
@@ -86,7 +86,7 @@ def computer(
           monitors        : list the detected monitors (for multi-screen setups).
           stop            : stand down — close the STOP overlay and release the
                             panic hotkey. CALL THIS as your final action when the
-                            task is complete. (Also auto-stands-down after idle.)
+                            task is complete.
           wait            : sleep for `duration` seconds, then screenshot.
         coordinate: [x, y] in the latest screenshot's pixel space.
         text: text to type, key name/chord, or "x1,y1" drag origin.

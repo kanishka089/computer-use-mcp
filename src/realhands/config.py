@@ -39,6 +39,8 @@ PANIC_HOTKEY: str = os.environ.get("COMPUTER_USE_PANIC_HOTKEY", "ctrl+alt+q").st
 OVERLAY: bool = _bool("COMPUTER_USE_OVERLAY", True)
 MOVE_DURATION: float = _float("COMPUTER_USE_MOVE_DURATION", 0.4)
 
-# Stand down (close overlay + release panic hotkey) after this many seconds with
-# no action. 0 disables the idle watchdog. The agent can also call action="stop".
-IDLE_STOP: float = _float("COMPUTER_USE_IDLE_STOP", 30.0)
+# Stand down (hide overlay + release panic hotkey) after this many seconds with no
+# action. Default 0 = DISABLED: stand down only when the agent calls action="stop"
+# at the end of a task. (An agent's thinking time between tool calls routinely
+# exceeds any short idle window, so a non-zero value here will stand down mid-task.)
+IDLE_STOP: float = _float("COMPUTER_USE_IDLE_STOP", 0.0)
