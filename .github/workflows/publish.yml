@@ -49,6 +49,23 @@ jobs:
           python -m build
           python -m twine check dist/*
 
+      - name: Smoke-test the wheel in a clean environment
+        # 0.1.1 and 0.2.0 both shipped broken: `mcp>=1.2` silently resolved to mcp 2.x,
+        # which removed `mcp.server.fastmcp`, so every fresh install died at import.
+        # twine check cannot catch that — only a real resolve-and-import can. Import
+        # only the display-free modules; pyautogui needs an X server we don't have.
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/python -m pip install --quiet --upgrade pip
+          /tmp/smoke/bin/python -m pip install --quiet dist/*.whl
+          /tmp/smoke/bin/python - <<'PY'
+          from importlib.metadata import version
+          print("resolved mcp:", version("mcp"))
+          from mcp.server.fastmcp import FastMCP, Image   # the exact 2.x breakage
+          import realhands, realhands.config
+          print("realhands", realhands.__version__, "imports cleanly")
+          PY
+
       - name: Verify the built version matches the tag
         env:
           TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}

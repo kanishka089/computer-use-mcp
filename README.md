@@ -170,7 +170,20 @@ delete data.**
 
 Requires **Python 3.10 or 3.11** (3.13+ untested; avoid the 3.14 beta).
 
-### From PyPI
+### Recommended: `uvx` (always the latest version)
+
+Nothing to install up front, and **you get every release automatically** — `uvx`
+resolves the newest published version each time the server starts, so a restart of your
+MCP client is the whole upgrade process. Requires [uv](https://docs.astral.sh/uv/).
+
+```powershell
+uvx realhands@latest
+```
+
+Drop the `@latest` (`uvx realhands`) if you would rather let uv reuse whatever version
+it already has cached.
+
+### From PyPI (pinned)
 
 ```powershell
 pip install realhands
@@ -178,6 +191,17 @@ pip install realhands
 
 This installs the `realhands` console script and the importable `realhands`
 package. Run the server with either `realhands` or `python -m realhands.server`.
+
+Pick this over `uvx` when you want a **pinned** version that never changes underneath
+you, or when the machine may be offline at startup — `uvx realhands@latest` needs to
+reach PyPI each time it launches. The trade-off is that upgrades become manual:
+
+```powershell
+pip install --upgrade realhands
+```
+
+Then restart your MCP client — clients bind their servers at session start, so a
+running session keeps the old code until it restarts.
 
 ### From source (with Claude Desktop registration)
 
@@ -193,14 +217,29 @@ existing config). **Restart Claude Desktop**, then look for the `computer-use` t
 
 ### Claude Code
 
-Register it as a **user-scope** stdio server named `realhands` (pointing at the Python
-that has the package installed):
+Register it as a **user-scope** stdio server named `realhands`. This form auto-upgrades
+— each new session resolves the latest release, so you never have to think about it:
+
+```powershell
+claude mcp add realhands --scope user -- uvx realhands@latest
+```
+
+The tool then appears as `mcp__realhands__computer` in every project.
+
+If you installed with `pip` instead and want a pinned version, point it at the Python
+that has the package (and run `pip install --upgrade realhands` yourself to move up):
 
 ```powershell
 claude mcp add realhands --scope user -- python -m realhands.server
 ```
 
-The tool then appears as `mcp__realhands__computer` in every project.
+> **Already registered on an older version?** Re-point it at the auto-upgrading form:
+> ```powershell
+> claude mcp remove realhands --scope user
+> claude mcp add realhands --scope user -- uvx realhands@latest
+> ```
+> Removing and re-adding an MCP mid-session drops this session's connection to it — the
+> new registration is picked up on the next Claude Code start.
 
 ## Use
 
