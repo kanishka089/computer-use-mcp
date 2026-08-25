@@ -1,17 +1,22 @@
 name: Publish to PyPI
 
 # Publishes via PyPI Trusted Publishing (OIDC) — no API token is stored anywhere.
-# Fires automatically when a GitHub release is published; workflow_dispatch lets you
-# publish a release that already exists (or re-run after a failure).
+#
+# Supply-chain notes, because this job can push code to every `pip install realhands`:
+#  * The ref is never attacker-supplied. A `release` run builds the tag recorded on
+#    the release itself; a manual run builds whatever tag it was dispatched against.
+#    There is no free-form `ref` input, so nobody with write access can point this at
+#    an unreviewed branch and publish it under the project's trusted-publisher identity.
+#  * Both triggers are gated to `refs/tags/v*`, so a modified copy of this workflow on
+#    some side branch cannot be dispatched to publish.
+#  * The built version must equal the tag, so a tag can never ship a different version.
+#  * Every action is pinned to a full commit SHA. The publish job holds `id-token: write`
+#    and a mutable tag (`@v4`, `@release/v1`) on any action in that job would let a
+#    compromised upstream mint a PyPI credential and publish arbitrary code.
 on:
   release:
     types: [published]
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Tag to build and publish (e.g. v0.2.0)"
-        required: true
-        default: v0.2.0
 
 permissions:
   contents: read
@@ -20,11 +25,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
+      - name: Refuse to build anything that is not a version tag
+        env:
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+        run: |
+          case "$TAG" in
+            refs/tags/v*|v*) echo "Building $TAG" ;;
+            *) echo "::error::Refusing to publish from '$TAG' — tag v* only."; exit 1 ;;
+          esac
 
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
@@ -33,6 +48,20 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           python -m twine check dist/*
+
+      - name: Verify the built version matches the tag
+        env:
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import glob, os, re, sys
+          tag = os.environ["TAG"].removeprefix("refs/tags/").lstrip("v")
+          built = {re.match(r"realhands-(.+?)-py3", os.path.basename(p)).group(1)
+                   for p in glob.glob("dist/*.whl")}
+          print(f"tag={tag} built={sorted(built)}")
+          if built != {tag}:
+              sys.exit(f"::error::Tag v{tag} does not match built version(s) {sorted(built)}")
+          PY
 
       - name: Verify the MCP registry ownership marker survived packaging
         run: |
@@ -47,7 +76,7 @@ jobs:
           sys.exit(0 if marker in text else 1)
           PY
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist
           path: dist/
@@ -60,9 +89,9 @@ jobs:
     permissions:
       id-token: write # required for OIDC — this is what replaces the API token
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dist
           path: dist/
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
