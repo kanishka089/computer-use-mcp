@@ -148,3 +148,49 @@ jobs:
           path: dist/
 
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+
+  # Publish the same version to the MCP Registry. Authenticates with `login
+  # github-oidc`, which exchanges this workflow's OIDC token for a registry JWT —
+  # the repository owner has to match the io.github.<owner>/* namespace in
+  # server.json. That replaces `mcp-publisher login github`, whose device-flow
+  # token lives about an hour and so had to be re-minted by hand for every single
+  # release. Runs after PyPI because the registry entry points at the published
+  # package: listing a version PyPI does not have would be a broken entry.
+  registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC — replaces the expiring device-flow token
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+
+      - name: Check server.json declares the version being released
+        env:
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          tag = os.environ["TAG"].removeprefix("refs/tags/").lstrip("v")
+          s = json.load(open("server.json"))
+          found = {s["version"]} | {p["version"] for p in s.get("packages", [])}
+          print(f"tag={tag} server.json={sorted(found)}")
+          if found != {tag}:
+              sys.exit(f"::error::server.json declares {sorted(found)}, expected {tag}. "
+                       "Bump BOTH the top-level version and every packages[].version.")
+          PY
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz"
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+          ./mcp-publisher --help >/dev/null
+
+      - name: Publish to the MCP Registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
