@@ -139,7 +139,14 @@ def activate_window(title: str) -> str:
                if w.title and title.lower() in w.title.lower()]
     if not matches:
         titles = [w.title for w in gw.getAllWindows() if w.title][:12]
-        return f"No window matching '{title}'. Open titles: {titles}"
+        # RAISE, don't return a message. In a batch this is the step that decides
+        # which application the following keystrokes land in — if the target window
+        # isn't there and we merely report it, the rest of the batch types into
+        # whatever happened to have focus (someone's editor, a chat box, a terminal).
+        # Raising aborts the batch at exactly the right point.
+        raise LookupError(
+            f"No window matching '{title}' — nothing was focused, so no further "
+            f"steps were run. Open titles: {titles}")
 
     # Prefer a non-minimized match; fall back to the first.
     win = next((w for w in matches if not w.isMinimized), matches[0])
