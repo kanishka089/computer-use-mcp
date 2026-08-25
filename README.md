@@ -241,6 +241,58 @@ claude mcp add realhands --scope user -- python -m realhands.server
 > Removing and re-adding an MCP mid-session drops this session's connection to it — the
 > new registration is picked up on the next Claude Code start.
 
+## Upgrading
+
+> **On 0.1.x?** Upgrade. `mcp` 2.0 removed the API 0.1.x imports, so while an install
+> made back when it resolved `mcp` 1.x still runs, reinstalling or moving machines will
+> produce a server that cannot start. 0.2.1 and later handle both. See
+> [v0.2.1](https://github.com/kanishka089/computer-use-mcp/releases/tag/v0.2.1).
+
+### Best: switch to the auto-upgrading form (once)
+
+Then you never do this again — every client restart picks up the newest release:
+
+```powershell
+claude mcp remove realhands --scope user
+claude mcp add realhands --scope user -- uvx realhands@latest
+```
+
+Restart Claude Code. (Removing and re-adding an MCP mid-session drops this session's
+connection to it; the new registration takes effect on the next start.)
+
+### Staying on pip
+
+**Upgrade the same interpreter the server actually runs** — not whatever `pip` happens
+to resolve. If you installed into a virtualenv, or have several Pythons, a bare
+`pip install --upgrade realhands` will cheerfully upgrade a different environment and
+leave the server on its old version. This is the most common reason an upgrade
+"doesn't take".
+
+First, find the interpreter:
+
+```powershell
+claude mcp get realhands
+```
+
+Read the `Command:` line — that is your Python. Then upgrade with it explicitly:
+
+```powershell
+& "C:\path\from\that\Command line\python.exe" -m pip install --upgrade realhands
+```
+
+If `Command:` is a bare `python`, `pip install --upgrade realhands` is fine.
+
+Confirm it took, then restart Claude Code:
+
+```powershell
+& "C:\path\to\python.exe" -c "import realhands; print(realhands.__version__)"
+```
+
+### Installed from source?
+
+`git pull` is enough — `install.py` installs the package as editable, so the checkout
+*is* the installed version. Restart your client.
+
 ## Use
 
 Just ask. For example:
