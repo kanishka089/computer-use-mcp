@@ -32,9 +32,16 @@ def _image(data: bytes) -> Image:
     return Image(data=data, format=fmt)
 
 
-def _shot(prefix: str, monitor: int | None = None) -> list:
-    """Capture and return [status text, screenshot image] as tool content."""
-    data, sw, sh, rw, rh = screen.capture(monitor)
+def _shot(prefix: str, monitor: int | None = None, force: bool = False) -> list:
+    """Capture and return [status text, screenshot image] as tool content.
+
+    Skips the image entirely when the screen is effectively unchanged since the
+    last one we sent — a repeat screenshot is the single most expensive thing
+    this server can do, because it is re-sent as history on every later turn.
+    """
+    data, sw, sh, _ = screen.capture_smart(monitor, force=force)
+    if data is None:
+        return [f"{prefix}\nScreen unchanged — the last screenshot is still accurate."]
     text = f"{prefix}\nScreenshot is {sw}x{sh}px — give all coordinates in this space."
     return [text, _image(data)]
 
@@ -45,161 +52,219 @@ def _need_xy(coordinate, action: str, monitor: int | None = None) -> tuple[int, 
     return screen.to_real(int(coordinate[0]), int(coordinate[1]), monitor)
 
 
-@mcp.tool()
-def computer(
-    action: str,
+# Answer in text and never need a screenshot to be understood.
+_TEXT_ONLY = {"cursor_position", "monitors"}
+
+
+def _run_one(
+    act: str,
     coordinate: list[int] | None = None,
     text: str | None = None,
     scroll_direction: str | None = None,
     scroll_amount: int | None = None,
     duration: float | None = None,
     monitor: int | None = None,
+) -> str:
+    """Drive the real mouse/keyboard for ONE action and return a status line.
+
+    Never captures the screen — the caller decides when an image is worth its
+    tokens, which is what lets a batch of steps share a single screenshot.
+    """
+    if act == "screenshot":
+        return "Screenshot taken."
+
+    if act == "cursor_position":
+        x, y = actions.cursor_position()
+        return f"Cursor at real pixel ({x}, {y})."
+
+    if act == "monitors":
+        mons = screen.list_monitors()
+        lines = [f"  [{m['index']}] {m['role']}: {m['width']}x{m['height']} "
+                 f"at ({m['left']},{m['top']})" for m in mons]
+        return "Detected monitors (pass `monitor=<index>`):\n" + "\n".join(lines)
+
+    if act == "mouse_move":
+        x, y = _need_xy(coordinate, act, monitor)
+        actions.move(x, y)
+
+    elif act in ("left_click", "right_click", "middle_click",
+                 "double_click", "triple_click"):
+        button = {"left_click": "left", "right_click": "right",
+                  "middle_click": "middle", "double_click": "left",
+                  "triple_click": "left"}[act]
+        clicks = {"double_click": 2, "triple_click": 3}.get(act, 1)
+        if coordinate:
+            x, y = _need_xy(coordinate, act, monitor)
+            actions.click(x, y, button=button, clicks=clicks)
+        else:
+            cx, cy = actions.cursor_position()
+            actions.click(cx, cy, button=button, clicks=clicks)
+
+    elif act == "left_click_drag":
+        x2, y2 = _need_xy(coordinate, act, monitor)
+        if not text or "," not in text:
+            raise ValueError("left_click_drag needs text='x1,y1' as the drag origin")
+        ox, oy = (int(v) for v in text.split(",")[:2])
+        x1, y1 = screen.to_real(ox, oy, monitor)
+        actions.drag(x1, y1, x2, y2)
+
+    elif act == "left_mouse_down":
+        x, y = _need_xy(coordinate, act, monitor)
+        actions.mouse_down(x, y)
+
+    elif act == "left_mouse_up":
+        x, y = _need_xy(coordinate, act, monitor)
+        actions.mouse_up(x, y)
+
+    elif act == "scroll":
+        x, y = _need_xy(coordinate, act, monitor)
+        actions.scroll(x, y, scroll_direction or "down", scroll_amount or 3)
+
+    elif act == "type":
+        if text is None:
+            raise ValueError("action 'type' requires text")
+        actions.type_text(text)
+
+    elif act == "key":
+        if not text:
+            raise ValueError("action 'key' requires text (e.g. 'ctrl+s')")
+        actions.key(text)
+
+    elif act == "hold_key":
+        if not text:
+            raise ValueError("action 'hold_key' requires text")
+        actions.hold_key(text, duration or 1.0)
+
+    elif act == "activate_window":
+        if not text:
+            raise ValueError("action 'activate_window' requires text (a window title substring)")
+        return actions.activate_window(text)
+
+    elif act == "wait":
+        time.sleep(max(0.0, float(duration or 1.0)))
+
+    else:
+        raise ValueError(f"unknown action: {act!r}")
+
+    return f"Did: {act}."
+
+
+@mcp.tool()
+def computer(
+    action: str | None = None,
+    coordinate: list[int] | None = None,
+    text: str | None = None,
+    scroll_direction: str | None = None,
+    scroll_amount: int | None = None,
+    duration: float | None = None,
+    monitor: int | None = None,
+    steps: list[dict] | None = None,
+    screenshot: bool = True,
 ) -> list:
     """Control the real computer: see the screen and act with the real mouse/keyboard.
 
-    ALWAYS start a task with action="screenshot" to see the screen. Coordinates are
-    in the pixel space of the most recent screenshot (its size is reported each time);
-    the server scales them to the real display automatically. After every non-screenshot
-    action a fresh screenshot is returned so you can see the result before the next step.
-    When the task is COMPLETE, call action="stop" to stand down (close the STOP
-    overlay and release the panic hotkey). By default it stays armed until you do.
+    Start a task with action="screenshot". Give coordinates in the pixel space of
+    the latest screenshot (its size is reported each time); they are scaled to the
+    real display for you. A fresh screenshot comes back after each call, so you can
+    see the result before deciding the next step. When the task is COMPLETE call
+    action="stop" to stand down.
+
+    BATCH WHENEVER YOU CAN. Pass `steps` — a list of action dicts run in order —
+    instead of one call per action, and you pay for ONE screenshot instead of one
+    per step. Batch every run of actions whose outcome you can already predict
+    (filling a form, a click then type then Enter, a menu path). Split into
+    separate calls only where you genuinely need to see the screen before choosing
+    what to do next. Example:
+      steps=[{"action":"left_click","coordinate":[420,300]},
+             {"action":"type","text":"hello@example.com"},
+             {"action":"key","text":"Tab"},
+             {"action":"type","text":"secret"},
+             {"action":"key","text":"Return"}]
+    Set screenshot=false to skip the trailing image too, when you don't need to
+    look at the result at all.
 
     Args:
-        action: One of —
-          screenshot      : capture the screen (returns an image).
-          cursor_position : report where the mouse is.
-          mouse_move      : move the cursor to coordinate.
-          left_click / right_click / middle_click / double_click / triple_click :
-                            click at coordinate (or current position if omitted).
-          left_click_drag : press at coordinate=[x2,y2] starting from `text`="x1,y1"
-                            ... or pass start via coordinate and end via scroll fields
-                            (prefer providing both via coordinate=end, text="x1,y1").
-          left_mouse_down / left_mouse_up : press/release the left button at coordinate.
-          scroll          : scroll at coordinate; needs scroll_direction
-                            (up/down/left/right) and scroll_amount (wheel notches).
-          type            : type the given `text` (handles Unicode/multiline).
-          key             : press a key or chord, e.g. "Return", "ctrl+s", "alt+Tab".
-          hold_key        : hold `text` keys for `duration` seconds.
-          activate_window : bring an app to the FRONT by title substring in `text`
-                            (e.g. "Chrome", "New tab", "Code") — prefer this over
-                            clicking the taskbar when you need to switch apps.
-          monitors        : list the detected monitors (for multi-screen setups).
-          stop            : stand down — close the STOP overlay and release the
-                            panic hotkey. CALL THIS as your final action when the
-                            task is complete.
-          wait            : sleep for `duration` seconds, then screenshot.
+        action: screenshot | cursor_position | mouse_move | left_click | right_click |
+          middle_click | double_click | triple_click | left_click_drag (end via
+          coordinate, origin via text="x1,y1") | left_mouse_down | left_mouse_up |
+          scroll | type | key | hold_key | activate_window (bring an app to the front
+          by title substring in `text` — prefer this over clicking the taskbar) |
+          monitors | wait | stop.
         coordinate: [x, y] in the latest screenshot's pixel space.
-        text: text to type, key name/chord, or "x1,y1" drag origin.
-        scroll_direction: up | down | left | right (for scroll).
-        scroll_amount: number of wheel notches (for scroll).
-        duration: seconds (for hold_key / wait).
-        monitor: which screen to view/act on — 1=primary (default), 2.. = other
-                 monitors, 0 = ALL screens at once. Call action="monitors" first to
-                 see the setup. Use the SAME monitor for a click as for the
-                 screenshot you're clicking on.
+        text: text to type, key name/chord ("Return", "ctrl+s"), window title, or
+          "x1,y1" drag origin.
+        scroll_direction: up | down | left | right.
+        scroll_amount: wheel notches.
+        duration: seconds (hold_key / wait).
+        monitor: 1=primary (default), 2.. = others, 0 = all screens. Use the SAME
+          monitor for a click as for the screenshot you are clicking on.
+        steps: list of {action, coordinate, text, ...} dicts to run in order,
+          sharing one screenshot at the end. Strongly preferred over many calls.
+        screenshot: set false to suppress the trailing screenshot entirely.
 
     Returns:
-        A list of content (status text + screenshot image).
+        Status text, plus a screenshot image unless the screen is unchanged or
+        screenshot=false.
     """
     act = (action or "").strip().lower()
 
     # Stand down when work is done — release the STOP overlay + panic hotkey.
-    if act in ("stop", "done", "release"):
+    if not steps and act in ("stop", "done", "release"):
         safety.stop()
         return ["Stood down: STOP overlay closed and panic hotkey released. "
                 "I'll re-arm automatically on the next action."]
 
     safety.start()  # lazily arm STOP overlay + panic hotkey (re-arms after a stop)
-    safety.set_status(f"{act} {coordinate or ''} {text or ''}".strip())
 
-    try:
-        if act == "screenshot":
-            return _shot("Screenshot taken.", monitor)
+    # Normalize single-action and batch calls into one list of steps.
+    if steps:
+        plan = [dict(s) for s in steps]
+    elif act:
+        plan = [{"action": act, "coordinate": coordinate, "text": text,
+                 "scroll_direction": scroll_direction, "scroll_amount": scroll_amount,
+                 "duration": duration}]
+    else:
+        raise ValueError("pass either action=... or steps=[...]")
 
-        if act == "cursor_position":
-            x, y = actions.cursor_position()
-            return [f"Cursor at real pixel ({x}, {y})."]
+    done: list[str] = []
+    failed = False
+    for i, step in enumerate(plan, 1):
+        sub = (step.get("action") or "").strip().lower()
+        if sub in ("stop", "done", "release"):
+            safety.stop()
+            done.append("Stood down.")
+            break
+        safety.set_status(f"{sub} {step.get('coordinate') or ''} {step.get('text') or ''}".strip())
+        try:
+            done.append(_run_one(
+                sub,
+                coordinate=step.get("coordinate"),
+                text=step.get("text"),
+                scroll_direction=step.get("scroll_direction"),
+                scroll_amount=step.get("scroll_amount"),
+                duration=step.get("duration"),
+                monitor=step.get("monitor", monitor),
+            ))
+        except Exception as exc:  # includes pyautogui.FailSafeException
+            if "FailSafe" in type(exc).__name__:
+                return ["ABORTED: mouse moved to the fail-safe corner. Automation halted."]
+            # Report where the run stopped, then still show the screen so the
+            # model can see the state it actually left behind.
+            done.append(f"STEP {i} ({sub}) FAILED: {type(exc).__name__}: {exc}")
+            failed = True
+            break
 
-        if act == "monitors":
-            mons = screen.list_monitors()
-            lines = [f"  [{m['index']}] {m['role']}: {m['width']}x{m['height']} "
-                     f"at ({m['left']},{m['top']})" for m in mons]
-            return ["Detected monitors (pass `monitor=<index>`):\n" + "\n".join(lines)]
+    only_text = len(plan) == 1 and plan[0].get("action", "").lower() in _TEXT_ONLY
+    summary = done[-1] if len(done) == 1 else "\n".join(
+        f"{i}. {m}" for i, m in enumerate(done, 1))
 
-        if act == "mouse_move":
-            x, y = _need_xy(coordinate, act, monitor)
-            actions.move(x, y)
+    if only_text or (not screenshot and not failed):
+        return [summary]
 
-        elif act in ("left_click", "right_click", "middle_click",
-                     "double_click", "triple_click"):
-            button = {"left_click": "left", "right_click": "right",
-                      "middle_click": "middle", "double_click": "left",
-                      "triple_click": "left"}[act]
-            clicks = {"double_click": 2, "triple_click": 3}.get(act, 1)
-            if coordinate:
-                x, y = _need_xy(coordinate, act, monitor)
-                actions.click(x, y, button=button, clicks=clicks)
-            else:
-                cx, cy = actions.cursor_position()
-                actions.click(cx, cy, button=button, clicks=clicks)
-
-        elif act == "left_click_drag":
-            x2, y2 = _need_xy(coordinate, act, monitor)
-            if not text or "," not in text:
-                raise ValueError("left_click_drag needs text='x1,y1' as the drag origin")
-            ox, oy = (int(v) for v in text.split(",")[:2])
-            x1, y1 = screen.to_real(ox, oy, monitor)
-            actions.drag(x1, y1, x2, y2)
-
-        elif act == "left_mouse_down":
-            x, y = _need_xy(coordinate, act, monitor)
-            actions.mouse_down(x, y)
-
-        elif act == "left_mouse_up":
-            x, y = _need_xy(coordinate, act, monitor)
-            actions.mouse_up(x, y)
-
-        elif act == "scroll":
-            x, y = _need_xy(coordinate, act, monitor)
-            actions.scroll(x, y, scroll_direction or "down", scroll_amount or 3)
-
-        elif act == "type":
-            if text is None:
-                raise ValueError("action 'type' requires text")
-            actions.type_text(text)
-
-        elif act == "key":
-            if not text:
-                raise ValueError("action 'key' requires text (e.g. 'ctrl+s')")
-            actions.key(text)
-
-        elif act == "hold_key":
-            if not text:
-                raise ValueError("action 'hold_key' requires text")
-            actions.hold_key(text, duration or 1.0)
-
-        elif act == "activate_window":
-            if not text:
-                raise ValueError("action 'activate_window' requires text (a window title substring)")
-            msg = actions.activate_window(text)
-            time.sleep(_SETTLE)
-            return _shot(msg, monitor)
-
-        elif act == "wait":
-            time.sleep(max(0.0, float(duration or 1.0)))
-
-        elif act != "screenshot":
-            raise ValueError(f"unknown action: {action!r}")
-
-    except Exception as exc:  # includes pyautogui.FailSafeException
-        name = type(exc).__name__
-        if "FailSafe" in name:
-            return ["ABORTED: mouse moved to the fail-safe corner. Automation halted."]
-        raise
-
-    # Non-screenshot action succeeded — show the result.
     time.sleep(_SETTLE)
-    return _shot(f"Did: {act}.", monitor)
+    # Force a real image after a failure — that is exactly when a stale frame is
+    # most likely and most costly to act on.
+    return _shot(summary, monitor, force=failed)
 
 
 def main() -> None:
@@ -207,9 +272,11 @@ def main() -> None:
     safety.configure()
     # safety.start() is deferred to the first `computer` tool call (see the tool body)
     # so idle sessions don't show the overlay or grab the panic hotkey.
+    _, sw, sh, rw, rh = screen.capture()
     print(
-        f"[computer-use-mcp] ready — monitor={config.MONITOR} "
-        f"max_dim={config.MAX_DIM} panic={config.PANIC_HOTKEY} overlay={config.OVERLAY}",
+        f"[computer-use-mcp] ready — monitor={config.MONITOR} {rw}x{rh} "
+        f"-> sends {sw}x{sh} ({screen.visual_tokens(sw, sh)} visual tokens/shot) "
+        f"panic={config.PANIC_HOTKEY} overlay={config.OVERLAY}",
         file=sys.stderr,
     )
     mcp.run()

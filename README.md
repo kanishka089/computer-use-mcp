@@ -37,6 +37,8 @@ Two Windows-specific details make clicks land accurately (`src/screen.py`):
   are scaled back up to real pixels. The scale factor is a pure function of monitor
   geometry + `MAX_DIM`, so mapping never depends on which screenshot ran last.
   Coordinates are clamped inside the target monitor so a stray click can't fly off-screen.
+  Each axis is rounded down to a whole 28px vision patch, so the two axes can scale very
+  slightly differently (<2.2%); `to_real()` maps each with its own factor and stays exact.
 
 **Multi-monitor:** every call takes an optional `monitor` index (1 = primary, 2.. =
 others, 0 = the whole virtual desktop). `action="monitors"` enumerates the setup.
@@ -48,9 +50,11 @@ offset. Use the **same** monitor for a click as for the screenshot you're clicki
 ```
 src/realhands/
   server.py   FastMCP server "computer-use"; the single `computer` tool (action enum
-              modeled on Anthropic's reference computer_20250124 tool); returns
-              status text + a fresh screenshot after every action
-  screen.py   DPI awareness, mss capture, downscale, model-space -> real-pixel mapping
+              modeled on Anthropic's reference computer_20250124 tool); runs one
+              action or a batch of `steps`, then returns status text + at most one
+              screenshot
+  screen.py   DPI awareness, mss capture, patch-aligned downscale, model-space ->
+              real-pixel mapping, unchanged-screen detection
   input.py    pyautogui mouse/keyboard execution; xdotool-style key-name translation
               (Return, Page_Down, ctrl+a, super, ...); clipboard-paste fast path for
               long/Unicode/multiline typing (preserves your existing clipboard);
@@ -88,6 +92,50 @@ A single tool with an `action` parameter:
 Coordinates are in the pixel space of the most recent screenshot; its size is reported
 with every capture. After every non-screenshot action the tool waits ~0.4s for the UI
 to settle and returns a fresh screenshot.
+
+### Token economy
+
+Screenshots dominate the cost of driving a desktop, and not just once: every image
+stays in the conversation and is re-sent as history on each later turn. Claude bills
+vision in 28×28 patches — `tokens = ⌈w/28⌉ × ⌈h/28⌉` — so this server does four things
+to keep the bill down.
+
+**Batch steps.** Pass `steps` (a list of action dicts) instead of one call per action
+and the whole run shares **one** screenshot at the end:
+
+```jsonc
+{"steps": [{"action": "left_click", "coordinate": [420, 300]},
+           {"action": "type",  "text": "hello@example.com"},
+           {"action": "key",   "text": "Tab"},
+           {"action": "type",  "text": "secret"},
+           {"action": "key",   "text": "Return"}]}
+```
+
+That is 1 125 visual tokens instead of 5 625, and one round trip instead of five — the
+larger saving, since each avoided turn also avoids re-sending the entire transcript.
+A failing step stops the run, reports which step failed, and still returns the screen.
+Add `"screenshot": false` to skip the trailing image too.
+
+**Patch-aligned downscaling.** A dimension that isn't a multiple of 28 pays for a
+partial patch row/column carrying almost no pixels. From a 1920×1080 primary the
+default 1260×700 is exactly 45×25 patches = 1 125 tokens, versus 1 196 for 1280×720 —
+6% off for 1.5% fewer pixels.
+
+**Unchanged-screen suppression.** If under `CHANGE_THRESHOLD` of pixels moved since the
+last image sent, the reply is a line of text instead of a screenshot. A real desktop
+never produces two byte-identical frames (clock, caret, hover states), so this is a
+threshold, not an equality check. After `MAX_SKIPS` suppressions in a row it force-sends
+one, so the model can't fly blind if it lost the earlier image to context compaction.
+
+**Right-sized images.** `COMPUTER_USE_MAX_DIM` trades grounding accuracy against cost —
+from a 1920×1080 primary: 1792 → 2 304 tokens, 1260 → 1 125 (default), 1036 → 777,
+896 → 576. Keep the long edge ≤ 2576 px: an image returned inside a `tool_result` is
+*rejected* rather than downscaled when it exceeds the model's limit.
+
+> `COMPUTER_USE_IMAGE_FORMAT` is **not** a token lever — Claude bills by pixel
+> dimensions, so a JPEG and a PNG of the same screenshot cost exactly the same. JPEG
+> only cuts payload bytes (~977 KB → ~141 KB here), which helps latency at some risk
+> to small-text legibility.
 
 ## Safety — it controls your REAL machine
 
@@ -168,9 +216,12 @@ signed-in Chrome session.
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `COMPUTER_USE_MAX_DIM` | `1280` | Longest screenshot side sent to Claude (sweet spot for accuracy + token cost) |
+| `COMPUTER_USE_MAX_DIM` | `1260` | Longest screenshot side sent to Claude; the main accuracy-vs-cost dial (see [Token economy](#token-economy)) |
+| `COMPUTER_USE_PATCH_ALIGN` | `1` | Round each axis down to a whole 28px patch so no tokens go on a partial patch (~6% off every shot) |
+| `COMPUTER_USE_CHANGE_THRESHOLD` | `0.002` | Skip the screenshot when less than this fraction of pixels moved (`0` = always send) |
+| `COMPUTER_USE_MAX_SKIPS` | `6` | Force a real screenshot after this many suppressed in a row |
 | `COMPUTER_USE_MONITOR` | `1` | Default monitor (1 = primary, 2.. = others, 0 = all screens); overridable per call |
-| `COMPUTER_USE_IMAGE_FORMAT` | `png` | `png` (crisp text) or `jpeg` (cheaper tokens) |
+| `COMPUTER_USE_IMAGE_FORMAT` | `png` | `png` (crisp text) or `jpeg` (smaller payload). **Not** a token lever — cost is by pixel dimensions, not bytes |
 | `COMPUTER_USE_PAUSE` | `0.15` | Delay after each pyautogui action (interruptibility) |
 | `COMPUTER_USE_PANIC_HOTKEY` | `ctrl+alt+q` | Global hard-stop hotkey |
 | `COMPUTER_USE_OVERLAY` | `1` | Show the STOP overlay window |

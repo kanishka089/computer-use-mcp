@@ -76,15 +76,62 @@ def list_monitors() -> list[dict]:
     return out
 
 
-def _scale_for(width: int, height: int) -> float:
-    """Factor to multiply a SENT (downscaled) coordinate by to get a REAL pixel.
+PATCH = 28  # Claude bills vision in 28x28 patches; see config.PATCH_ALIGN.
 
-    >= 1.0 always; equals 1.0 when the screen already fits within MAX_DIM.
+
+def _target_size(real_w: int, real_h: int) -> tuple[int, int]:
+    """The exact (width, height) we send to the model for this monitor.
+
+    Single source of truth: capture() resizes to it and to_real() derives its
+    scale factors from it, so a coordinate never depends on which screenshot ran
+    last. Patch alignment rounds each axis DOWN to a whole 28px patch, which
+    drops a sliver of pixels (<28px) to avoid paying for a partial patch row or
+    column. Each axis rounds independently, so the scale can be very slightly
+    non-uniform (<2.2%) — harmless, because to_real() maps each axis with its own
+    factor rather than assuming a single one.
     """
-    longest = max(width, height)
-    if longest <= config.MAX_DIM:
-        return 1.0
-    return longest / config.MAX_DIM
+    longest = max(real_w, real_h)
+    if longest > config.MAX_DIM:
+        scale = longest / config.MAX_DIM
+        sent_w = max(1, round(real_w / scale))
+        sent_h = max(1, round(real_h / scale))
+    else:
+        sent_w, sent_h = real_w, real_h
+
+    if config.PATCH_ALIGN:
+        # Only round down when there is a whole patch to keep on that axis.
+        if sent_w >= PATCH:
+            sent_w = (sent_w // PATCH) * PATCH
+        if sent_h >= PATCH:
+            sent_h = (sent_h // PATCH) * PATCH
+    return sent_w, sent_h
+
+
+def visual_tokens(width: int, height: int) -> int:
+    """What this image costs Claude: ceil(w/28) * ceil(h/28) visual tokens."""
+    return -(-width // PATCH) * -(-height // PATCH)
+
+
+def _encode(img: "Image.Image") -> bytes:
+    buf = io.BytesIO()
+    if config.IMAGE_FORMAT == "jpeg":
+        img.save(buf, format="JPEG", quality=80)
+    else:
+        img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def grab(monitor: int | None = None) -> tuple["Image.Image", int, int]:
+    """Grab a monitor and return the model-sized PIL image + its real dimensions."""
+    left, top, real_w, real_h = _monitor_geometry(monitor)
+    with mss.MSS() as sct:
+        raw = sct.grab({"left": left, "top": top, "width": real_w, "height": real_h})
+    img = Image.frombytes("RGB", raw.size, raw.rgb)
+
+    sent_w, sent_h = _target_size(real_w, real_h)
+    if (sent_w, sent_h) != (real_w, real_h):
+        img = img.resize((sent_w, sent_h), Image.LANCZOS)
+    return img, real_w, real_h
 
 
 def capture(monitor: int | None = None) -> tuple[bytes, int, int, int, int]:
@@ -92,25 +139,8 @@ def capture(monitor: int | None = None) -> tuple[bytes, int, int, int, int]:
 
     Returns: (image_bytes, sent_w, sent_h, real_w, real_h)
     """
-    left, top, real_w, real_h = _monitor_geometry(monitor)
-    with mss.MSS() as sct:
-        raw = sct.grab({"left": left, "top": top, "width": real_w, "height": real_h})
-    img = Image.frombytes("RGB", raw.size, raw.rgb)
-
-    scale = _scale_for(real_w, real_h)
-    if scale > 1.0:
-        sent_w = max(1, round(real_w / scale))
-        sent_h = max(1, round(real_h / scale))
-        img = img.resize((sent_w, sent_h), Image.LANCZOS)
-    else:
-        sent_w, sent_h = real_w, real_h
-
-    buf = io.BytesIO()
-    if config.IMAGE_FORMAT == "jpeg":
-        img.save(buf, format="JPEG", quality=80)
-    else:
-        img.save(buf, format="PNG")
-    return buf.getvalue(), sent_w, sent_h, real_w, real_h
+    img, real_w, real_h = grab(monitor)
+    return _encode(img), img.width, img.height, real_w, real_h
 
 
 def to_real(x: int, y: int, monitor: int | None = None) -> tuple[int, int]:
@@ -120,9 +150,9 @@ def to_real(x: int, y: int, monitor: int | None = None) -> tuple[int, int]:
     the SAME monitor the screenshot was taken on.
     """
     left, top, real_w, real_h = _monitor_geometry(monitor)
-    scale = _scale_for(real_w, real_h)
-    rx = left + int(round(x * scale))
-    ry = top + int(round(y * scale))
+    sent_w, sent_h = _target_size(real_w, real_h)
+    rx = left + int(round(x * (real_w / sent_w)))
+    ry = top + int(round(y * (real_h / sent_h)))
     # Clamp inside the monitor so a stray coordinate can't fly off-screen.
     rx = min(max(rx, left), left + real_w - 1)
     ry = min(max(ry, top), top + real_h - 1)
@@ -133,6 +163,67 @@ def image_mime() -> str:
     return "image/jpeg" if config.IMAGE_FORMAT == "jpeg" else "image/png"
 
 
+# --- change detection -------------------------------------------------------
+# The most expensive thing this server can do is send a screenshot the model has
+# already seen. A full 1260x700 frame costs ~1125 visual tokens and is re-sent on
+# every later turn as conversation history, so a redundant one is not a one-off
+# charge. We keep the last frame we actually sent (per monitor) and skip the
+# image when nothing meaningful moved.
+#
+# Equality is useless here: a real desktop never produces two identical frames
+# (clock, text caret, hover states, antialiasing all jitter), so we measure the
+# FRACTION of materially-different pixels instead.
+
+_last_sent: dict[int, "Image.Image"] = {}
+_skips: dict[int, int] = {}
+
+
+def _changed_fraction(a: "Image.Image", b: "Image.Image") -> float:
+    """Fraction of pixels that differ by more than a just-noticeable amount."""
+    from PIL import ImageChops
+
+    diff = ImageChops.difference(a, b).convert("L")
+    # Ignore sub-threshold noise (compression/antialias jitter), then count.
+    mask = diff.point(lambda p: 255 if p > 8 else 0)
+    hist = mask.histogram()
+    return hist[255] / float(a.width * a.height)
+
+
+def capture_smart(
+    monitor: int | None = None, force: bool = False
+) -> tuple[bytes | None, int, int, float]:
+    """Capture, but return no bytes when the screen is effectively unchanged.
+
+    Returns (image_bytes_or_None, sent_w, sent_h, changed_fraction). A None
+    image means "the last screenshot you were sent is still accurate". Forced
+    every config.MAX_SKIPS calls so the model can never drift too far from the
+    real screen if it lost the earlier image.
+    """
+    key = config.MONITOR if monitor is None else int(monitor)
+    img, _, _ = grab(monitor)
+    prev = _last_sent.get(key)
+
+    changed = 1.0
+    if prev is not None and prev.size == img.size:
+        changed = _changed_fraction(prev, img)
+
+    skips = _skips.get(key, 0)
+    suppress = (
+        not force
+        and config.CHANGE_THRESHOLD > 0
+        and prev is not None
+        and changed < config.CHANGE_THRESHOLD
+        and skips < config.MAX_SKIPS
+    )
+    if suppress:
+        _skips[key] = skips + 1
+        return None, img.width, img.height, changed
+
+    _last_sent[key] = img
+    _skips[key] = 0
+    return _encode(img), img.width, img.height, changed
+
+
 if __name__ == "__main__":
     # Self-test: capture, report dims, write a file to eyeball.
     data, sw, sh, rw, rh = capture()
@@ -140,7 +231,8 @@ if __name__ == "__main__":
     with open(out, "wb") as f:
         f.write(data)
     print(f"Real monitor: {rw}x{rh}")
-    print(f"Sent to model: {sw}x{sh}  (scale={_scale_for(rw, rh):.4f})")
+    print(f"Sent to model: {sw}x{sh}  (scale x{rw / sw:.4f} y{rh / sh:.4f})")
+    print(f"Visual tokens: {visual_tokens(sw, sh)}  ({sw // 28}x{sh // 28} patches)")
     print(f"Wrote {out} ({len(data)} bytes)")
 
     # Coordinate round-trip sanity check across the sent image.
