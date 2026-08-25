@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "realhands"
-version = "0.2.2"
+version = "0.3.0"
 description = "MCP server that lets Claude operate the REAL desktop (mouse, keyboard, screen) like a human — works in your own logged-in Chrome and any app"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,10 +22,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    # mcp 2.0 removed `mcp.server.fastmcp` (FastMCP moved out of the SDK), so an
-    # unbounded `mcp>=1.2` silently resolves to 2.x and every fresh install dies at
-    # import with ModuleNotFoundError. Stay on 1.x until server.py is ported.
-    "mcp>=1.2,<2",
+    # server.py imports FastMCP (1.x) / MCPServer (2.x) with a fallback, so both
+    # majors work and this stays unbounded. CI smoke-tests each major separately.
+    "mcp>=1.2",
     "pyautogui>=0.9.54",
     "mss>=9.0",
     "pillow>=10.0",

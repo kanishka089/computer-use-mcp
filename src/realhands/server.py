@@ -13,7 +13,16 @@ from __future__ import annotations
 import sys
 import time
 
-from mcp.server.fastmcp import FastMCP, Image
+# mcp 2.0 renamed FastMCP -> MCPServer and moved it from `mcp.server.fastmcp` to
+# `mcp.server.mcpserver`. The surface we use is identical across both (the `.tool()`
+# decorator, `.run()` defaulting to stdio, and `Image(data=..., format=...)`), and a
+# tool returning [str, Image] yields TextContent + ImageContent either way — so support
+# both rather than pinning users to one. 0.1.1/0.2.0 shipped with an unbounded
+# `mcp>=1.2`, resolved to 2.x, and died here at import; see CHANGELOG for 0.2.1.
+try:  # mcp >= 2.0
+    from mcp.server.mcpserver import MCPServer as _Server, Image
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as _Server, Image
 
 from . import config
 from . import screen
@@ -21,7 +30,7 @@ from . import safety
 from . import input as actions  # mouse/keyboard execution (real pixels)
 
 
-mcp = FastMCP("computer-use")
+mcp = _Server("computer-use")
 
 # Settle time after an action before the follow-up screenshot, so UI can update.
 _SETTLE = 0.4

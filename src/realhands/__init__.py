@@ -1,3 +1,3 @@
 """realhands — an MCP server that drives the REAL desktop (mouse, keyboard, screen)."""
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
